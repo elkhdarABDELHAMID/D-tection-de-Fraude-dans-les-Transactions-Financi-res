@@ -1,0 +1,8 @@
+requests
+apache-airflow-providers-apache-hdfs
+apache-airflow-providers-apache-hive
+pyhive
+thrift
+thrift_sasl
+hdfs
+apache-airflow-providers-http

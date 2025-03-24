@@ -1,0 +1,167 @@
+version: '3.8'
+
+services:
+  hdfs-namenode:
+    build:
+      context: ./hdfs
+      dockerfile: Dockerfile
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    volumes:
+      - hdfs-data:/hadoop/dfs/name
+    networks:
+      - fraud-net
+    environment:
+      - SERVICE=namenode
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9870"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  hdfs-datanode:
+    build:
+      context: ./hdfs
+      dockerfile: Dockerfile
+    ports:
+      - "9864:9864"
+    environment:
+      - SERVICE=datanode
+      - INIT_HIVE_DIRS=true
+    volumes:
+      - hdfs-datanode-data:/hadoop/dfs/data
+    depends_on:
+      hdfs-namenode:
+        condition: service_healthy
+    networks:
+      - fraud-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9864"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    volumes:
+      - shared-data:/tmp
+    networks:
+      - fraud-net
+
+  hive-metastore:
+    build:
+      context: ./hive
+      dockerfile: Dockerfile
+    container_name: testprojetairflow-hive-metastore-1
+    command: ["sh", "-c", "sleep 30 && /entrypoint.sh"]
+    environment:
+      - SERVICE=metastore
+      - HADOOP_HOME=/opt/hadoop
+      - HIVE_CONF_DIR=/opt/hive/conf
+      - HADOOP_CLASSPATH=/opt/hive/lib/*:/opt/hadoop/lib/*
+    volumes:
+      - hdfs-data:/hadoop/dfs/name
+      - ./hive/conf:/opt/hive/conf
+      - shared-data:/tmp
+      - hive-metastore-db:/opt/hive/metastore_db
+    ports:
+      - "9083:9083"
+    depends_on:
+      hdfs-namenode:
+        condition: service_healthy
+      hdfs-datanode:
+        condition: service_started
+    networks:
+      - fraud-net
+    restart: on-failure:3
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9083 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  hive-server:
+    build:
+      context: ./hive
+      dockerfile: Dockerfile
+    container_name: testprojetairflow-hive-server-1
+    ports:
+      - "10000:10000"
+      - "10002:10002"
+    environment:
+      - SERVICE=hiveserver2
+      - HADOOP_HOME=/opt/hadoop
+      - HIVE_CONF_DIR=/opt/hive/conf
+      - HADOOP_CLASSPATH=/opt/hive/lib/*:/opt/hadoop/lib/*
+      - DB_TYPE=sqlite
+    volumes:
+      - hdfs-data:/hadoop/dfs/name
+      - ./hive/conf:/opt/hive/conf
+      - shared-data:/tmp
+    depends_on:
+      hive-metastore:
+        condition: service_healthy
+    networks:
+      - fraud-net
+    restart: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 10000 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  airflow:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: testprojetairflow-airflow-1
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow-logs:/opt/airflow/logs
+      - shared-data:/tmp
+    depends_on:
+      hdfs-namenode:
+        condition: service_healthy
+      hdfs-datanode:
+        condition: service_started
+      api:
+        condition: service_started
+      hive-server:
+        condition: service_healthy
+    networks:
+      - fraud-net
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
+      - AIRFLOW__LOGGING__BASE_LOG_FOLDER=/opt/airflow/logs
+      - AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL=30
+    command: >
+      bash -c "airflow db init && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com && airflow scheduler & airflow webserver"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+volumes:
+  hdfs-data:
+  hdfs-datanode-data:
+  shared-data:
+  hive-metastore-db:
+  airflow-logs:
+
+networks:
+  fraud-net:
+    driver: bridge
